@@ -213,7 +213,7 @@ public final class DefaultScanningWorkflow {
                 ReconnaissanceReport.newBuilder()
                     .setTargetInfo(targetInfo)
                     .addAllNetworkServices(networkServicesToKeep)
-                    .addAllNetworkServices(successfullyFingerprintedServices(executionResults))
+                    .addAllNetworkServices(getFingerprintedServices(executionResults))
                     .build(),
             directExecutor());
   }
@@ -230,11 +230,17 @@ public final class DefaultScanningWorkflow {
         .build();
   }
 
-  private static ImmutableList<NetworkService> successfullyFingerprintedServices(
+  @SuppressWarnings("unchecked")
+  private static ImmutableList<NetworkService> getFingerprintedServices(
       Collection<PluginExecutionResult<FingerprintingReport>> executionResults) {
     return executionResults.stream()
-        .filter(PluginExecutionResult::isSucceeded)
-        .flatMap(result -> result.resultData().get().getNetworkServicesList().stream())
+        .flatMap(
+            result ->
+                result.isSucceeded()
+                    ? result.resultData().get().getNetworkServicesList().stream()
+                    : ((List<NetworkService>)
+                            result.executorConfig().matchedPlugin().matchedServices())
+                        .stream())
         .collect(toImmutableList());
   }
 
@@ -267,11 +273,14 @@ public final class DefaultScanningWorkflow {
                         pluginExecutorProvider.get().executeAsync(vulnDetectorExecutorConfig))
                 .collect(toImmutableList());
     return FluentFuture.from(Futures.successfulAsList(detectionResultFutures))
-        .transform(this::generateScanResults, directExecutor());
+        .transform(
+            detectionResult -> generateScanResults(detectionResult, reconnaissanceReport),
+            directExecutor());
   }
 
   private ScanResults generateScanResults(
-      Collection<PluginExecutionResult<DetectionReportList>> detectionResults) {
+      Collection<PluginExecutionResult<DetectionReportList>> detectionResults,
+      ReconnaissanceReport reconnaissanceReport) {
     executionTracer.setDone();
     logger.atInfo().log("Tsunami scanning workflow done. Generating scan results.");
 
@@ -327,6 +336,7 @@ public final class DefaultScanningWorkflow {
                 Duration.between(scanStartTimestamp, Instant.now(clock)).toMillis()))
         .setFullDetectionReports(
             FullDetectionReports.newBuilder().addAllDetectionReports(succeededDetectionReports))
+        .setReconnaissanceReport(reconnaissanceReport)
         .build();
   }
 
